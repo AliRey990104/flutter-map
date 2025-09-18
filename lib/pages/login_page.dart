@@ -35,17 +35,34 @@ class _LoginPageState extends State<LoginPage> {
         );
         Navigator.pop(context);
       } else {
-        await _auth.createUserWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text.trim(),
-        );
-        showTopBanner(
-          context,
-          "حساب با موفقیت ایجاد شد",
-          isError: false,
-          duration: const Duration(seconds: 6),
-        );
-        Navigator.pop(context);
+        // چک برای ثبت‌نام تکراری
+        try {
+          await _auth.signInWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+          showTopBanner(
+            context,
+            "این ایمیل قبلاً ثبت شده است. از ورود استفاده کنید.",
+            isError: true,
+            duration: const Duration(seconds: 6),
+          );
+          setState(() => _isLogin = true); // سوئیچ به حالت ورود
+          return;
+        } catch (e) {
+          // اگر خطا داد، یعنی کاربر وجود نداره، پس ثبت‌نام کن
+          await _auth.createUserWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+          showTopBanner(
+            context,
+            "حساب با موفقیت ایجاد شد",
+            isError: false,
+            duration: const Duration(seconds: 6),
+          );
+          Navigator.pop(context);
+        }
       }
     } on FirebaseAuthException catch (e) {
       final msg = e.message ?? e.code;

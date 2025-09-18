@@ -1,11 +1,16 @@
 // lib/pages/map_page.dart
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
-import 'dart:math' as math; // برای Point<double> و توابع ریاضی
+import 'dart:math' as math;
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
+import 'package:url_launcher/url_launcher.dart'; // اضافه کردن import
 
 import '../providers/places_provider.dart';
 import '../models/place.dart';
@@ -41,6 +46,25 @@ class _MapPageState extends State<MapPage> {
   void initState() {
     super.initState();
     _initFlow();
+    // Listener برای رفرش بعد از لاگین
+    FirebaseAuth.instance.authStateChanges().listen((User? user) {
+      if (user != null) {
+        setState(() {}); // رفرش UI بعد از لاگین
+        _refreshAfterLogin();
+      }
+    });
+  }
+
+  Future<void> _refreshAfterLogin() async {
+    if (_locationLoaded) {
+      await Provider.of<PlacesProvider>(context, listen: false).fetchPlaces(
+        userLocation: _currentLocation,
+        radiusMeters: _radiusMeters,
+        categoryFilter: _selectedCategory,
+      );
+      // زوم کوچک برای رفرش
+      _mapController.move(_mapController.camera.center, _zoom);
+    }
   }
 
   Future<void> _initFlow() async {
@@ -93,6 +117,26 @@ class _MapPageState extends State<MapPage> {
     final g = (hash * 57) % 200 + 30;
     final b = (hash * 37) % 200 + 30;
     return Color.fromARGB(255, r, g, b);
+  }
+
+  Future<String?> _pickAndSaveImage() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile == null) return null;
+
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final imagesDir = Directory(path.join(directory.path, 'places_images'));
+      await imagesDir.create(recursive: true); // ایجاد پوشه اگر وجود نداره
+      final fileName = path.basename(pickedFile.path);
+      final savedImage = await File(
+        pickedFile.path,
+      ).copy(path.join(imagesDir.path, fileName));
+      return savedImage.path;
+    } catch (e) {
+      print('Error saving image: $e');
+      return null;
+    }
   }
 
   @override
@@ -148,7 +192,6 @@ class _MapPageState extends State<MapPage> {
           height: 40,
           child: GestureDetector(
             onPanUpdate: (details) {
-              // محاسبه مختصات جدید موقع drag با Point از dart:math
               final renderBox = context.findRenderObject() as RenderBox?;
               if (renderBox == null) return;
               final offset = renderBox.globalToLocal(details.globalPosition);
@@ -202,7 +245,6 @@ class _MapPageState extends State<MapPage> {
                 heroTag: 'confirm_location',
                 onPressed: () {
                   if (_tempLocation != null) {
-                    // بازگشت به فرم با مختصات انتخاب‌شده
                     _openAddPlaceDialog(_tempLocation!);
                   }
                   setState(() {
@@ -514,132 +556,187 @@ class _MapPageState extends State<MapPage> {
       text: center.longitude.toString(),
     );
     String? selectedCategory;
+    bool isPublic = true;
+    String imagePath = '';
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('اضافه کردن مکان جدید'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                decoration: InputDecoration(
-                  labelText: 'نام مکان',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+      builder: (_) => StatefulBuilder(
+        // StatefulBuilder برای به‌روزرسانی state
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('اضافه کردن مکان جدید'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: InputDecoration(
+                    labelText: 'نام مکان',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                decoration: InputDecoration(
-                  labelText: 'دسته‌بندی',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  decoration: InputDecoration(
+                    labelText: 'دسته‌بندی',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  items: categories.map((c) {
+                    return DropdownMenuItem(
+                      value: c['key'] as String,
+                      child: Text(c['label'] as String),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    setDialogState(() {
+                      selectedCategory = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: 12),
+                // Radio Button for Public/Private
+                Row(
+                  children: [
+                    Radio<bool>(
+                      value: true,
+                      groupValue: isPublic,
+                      onChanged: (value) {
+                        setDialogState(() {
+                          isPublic = value!;
+                        });
+                      },
+                    ),
+                    const Text('Public'),
+                    Radio<bool>(
+                      value: false,
+                      groupValue: isPublic,
+                      onChanged: (value) {
+                        setDialogState(() {
+                          isPublic = value!;
+                        });
+                      },
+                    ),
+                    const Text('Private'),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: latController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'عرض جغرافیایی (Latitude)',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
-                items: categories.map((c) {
-                  return DropdownMenuItem(
-                    value: c['key'] as String,
-                    child: Text(c['label'] as String),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  selectedCategory = value;
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: latController,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: 'عرض جغرافیایی (Latitude)',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: lngController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'طول جغرافیایی (Longitude)',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: lngController,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: 'طول جغرافیایی (Longitude)',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                const SizedBox(height: 12),
+                // آپلود عکس
+                ElevatedButton(
+                  onPressed: () async {
+                    final imagePathSelected = await _pickAndSaveImage();
+                    if (imagePathSelected != null) {
+                      setDialogState(() {
+                        imagePath = imagePathSelected;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('عکس ذخیره شد')),
+                      );
+                    }
+                  },
+                  child: Text(
+                    'آپلود عکس (${imagePath.isNotEmpty ? 'OK' : 'انتخاب'})',
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context); // بستن دیالوگ
-                  setState(() {
-                    _isSelectingLocation = true;
-                    _tempLocation = center; // شروع با مرکز نقشه
-                  });
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context); // بستن دیالوگ
+                    setState(() {
+                      _isSelectingLocation = true;
+                      _tempLocation = center; // شروع با مرکز نقشه
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('مکان را با drag یا tap انتخاب کنید'),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0F7CFF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('Visualize Location'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('لغو'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (titleController.text.trim().isEmpty ||
+                    selectedCategory == null ||
+                    latController.text.trim().isEmpty ||
+                    lngController.text.trim().isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('مکان را با drag یا tap انتخاب کنید'),
-                      duration: Duration(seconds: 3),
+                      content: Text('لطفاً تمام فیلدها را پر کنید'),
                     ),
                   );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF0F7CFF),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text('Visualize Location'),
-              ),
-            ],
-          ),
+                  return;
+                }
+                try {
+                  final newPlace = Place(
+                    id: '',
+                    userId: FirebaseAuth.instance.currentUser!.uid,
+                    title: titleController.text.trim(),
+                    category: selectedCategory!,
+                    lat: double.parse(latController.text.trim()),
+                    lng: double.parse(lngController.text.trim()),
+                    isPublic: isPublic,
+                    imagePath: imagePath,
+                  );
+                  await Provider.of<PlacesProvider>(
+                    context,
+                    listen: false,
+                  ).addPlace(newPlace);
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('مکان با موفقیت اضافه شد')),
+                  );
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('خطا در اضافه کردن مکان: $e')),
+                  );
+                }
+              },
+              child: const Text('اضافه کردن'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('لغو'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (titleController.text.trim().isEmpty ||
-                  selectedCategory == null ||
-                  latController.text.trim().isEmpty ||
-                  lngController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('لطفاً تمام فیلدها را پر کنید')),
-                );
-                return;
-              }
-              try {
-                final newPlace = Place(
-                  id: '',
-                  userId: FirebaseAuth.instance.currentUser!.uid,
-                  title: titleController.text.trim(),
-                  category: selectedCategory!,
-                  lat: double.parse(latController.text.trim()),
-                  lng: double.parse(lngController.text.trim()),
-                );
-                await Provider.of<PlacesProvider>(
-                  context,
-                  listen: false,
-                ).addPlace(newPlace);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('مکان با موفقیت اضافه شد')),
-                );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('خطا در اضافه کردن مکان: $e')),
-                );
-              }
-            },
-            child: const Text('اضافه کردن'),
-          ),
-        ],
       ),
     );
   }
@@ -651,23 +748,131 @@ class _MapPageState extends State<MapPage> {
         listen: false,
       ).addRecentPlace(p);
     }
+
+    final provider = Provider.of<PlacesProvider>(context, listen: false);
+    final distance = provider.calculateDistance(
+      _currentLocation,
+      LatLng(p.lat, p.lng),
+    ); // استفاده از متد public
+
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(p.title),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Category: ${p.category}'),
-            Text('Lat: ${p.lat}, Lng: ${p.lng}'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header: Title left, Creator right
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(
+                      p.title,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    p.creatorEmail.isNotEmpty
+                        ? p.creatorEmail.split('@')[0]
+                        : 'Unknown',
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Image
+              if (p.imagePath.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.file(
+                    File(p.imagePath),
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 200,
+                        width: double.infinity,
+                        color: Colors.grey[300],
+                        child: const Icon(Icons.image_not_supported, size: 50),
+                      );
+                    },
+                  ),
+                ),
+              const SizedBox(height: 12),
+              // Icons row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.favorite_border),
+                    onPressed: () {}, // Placeholder for like
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.comment),
+                    onPressed: () {}, // Placeholder for comment
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.bookmark_border),
+                    onPressed: () {
+                      Provider.of<PlacesProvider>(
+                        context,
+                        listen: false,
+                      ).savePlace(p);
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('مکان ذخیره شد')),
+                      );
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.directions),
+                    onPressed: () async {
+                      final url =
+                          'https://maps.google.com/dir/?api=1&destination=${p.lat},${p.lng}';
+                      final uri = Uri.parse(url);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(
+                          uri,
+                          mode: LaunchMode.externalApplication,
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('نمی‌توان نقشه را باز کرد'),
+                          ),
+                        );
+                      }
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Bottom: Created time left, Distance right
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    p.createdAt != null
+                        ? 'ایجاد: ${p.createdAt!.toLocal().toString().split(' ')[0]}'
+                        : 'نامشخص',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  Text(
+                    '${distance.toStringAsFixed(1)} km',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
