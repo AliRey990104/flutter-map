@@ -1,40 +1,46 @@
 // lib/pages/saved_places_page.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/place.dart';
 import '../providers/places_provider.dart';
-
-typedef OnSelectPlace = void Function(Place p);
+import '../models/place.dart';
 
 class SavedPlacesPage extends StatelessWidget {
-  final OnSelectPlace? onSelect;
-  const SavedPlacesPage({super.key, this.onSelect});
+  final Function(Place) onSelect;
+
+  const SavedPlacesPage({super.key, required this.onSelect});
 
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<PlacesProvider>(context);
-    final saved = provider.savedPlaces;
+    final places = provider.savedPlaces;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Saved Places')),
-      body: saved.isEmpty
-          ? const Center(child: Text('No saved places'))
+      appBar: AppBar(title: const Text('مکان‌های ذخیره‌شده')),
+      body: places.isEmpty
+          ? const Center(child: Text('هیچ مکان ذخیره‌شده‌ای یافت نشد'))
           : ListView.builder(
-              itemCount: saved.length,
-              itemBuilder: (_, i) {
-                final p = saved[i];
+              itemCount: places.length,
+              itemBuilder: (ctx, i) {
+                final p = places[i];
                 return ListTile(
                   title: Text(p.title),
                   subtitle: Text(p.category),
                   trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline),
+                    icon: const Icon(Icons.delete, color: Colors.red),
                     onPressed: () async {
-                      await provider.unsavePlace(p.id);
+                      try {
+                        await provider.unsavePlace(p.id);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('مکان حذف شد')),
+                        );
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('خطا در حذف: $e')),
+                        );
+                      }
                     },
                   ),
-                  onTap: () {
-                    if (onSelect != null) onSelect!(p);
-                  },
+                  onTap: () => onSelect(p),
                 );
               },
             ),

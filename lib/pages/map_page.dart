@@ -5,11 +5,13 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
+import 'dart:math' as math; // برای Point<double> و توابع ریاضی
 
 import '../providers/places_provider.dart';
 import '../models/place.dart';
 import 'login_page.dart';
 import 'saved_places_page.dart';
+import 'recent_places_page.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -21,8 +23,10 @@ class MapPage extends StatefulWidget {
 class _MapPageState extends State<MapPage> {
   final MapController _mapController = MapController();
   LatLng _currentLocation = const LatLng(29.6347, 52.5225); // شیراز پیش‌فرض
-  double _zoom = 18.0;
+  double _zoom = 13.0;
   bool _locationLoaded = false;
+  bool _isSelectingLocation = false; // حالت انتخاب مکان
+  LatLng? _tempLocation; // مختصات موقت برای مارکر قرمز
 
   final List<Map<String, dynamic>> categories = [
     {'key': 'pharmacy', 'label': 'Pharmacy', 'icon': Icons.local_pharmacy},
@@ -30,9 +34,8 @@ class _MapPageState extends State<MapPage> {
     {'key': 'clinic', 'label': 'Clinic', 'icon': Icons.medical_services},
     {'key': 'gas', 'label': 'Gas', 'icon': Icons.local_gas_station},
   ];
-
   String? _selectedCategory;
-  final double _radiusMeters = 5000;
+  final double _radiusMeters = 5000000000;
 
   @override
   void initState() {
@@ -84,7 +87,6 @@ class _MapPageState extends State<MapPage> {
     });
   }
 
-  // رنگ رندوم از uid/email
   Color _colorFromString(String s) {
     final hash = s.runes.fold<int>(0, (a, b) => a + b);
     final r = (hash * 97) % 200 + 30;
@@ -100,7 +102,7 @@ class _MapPageState extends State<MapPage> {
     final user = FirebaseAuth.instance.currentUser;
     final markers = <Marker>[];
 
-    // small blue location marker
+    // مارکر موقعیت فعلی کاربر
     markers.add(
       Marker(
         point: _currentLocation,
@@ -122,7 +124,7 @@ class _MapPageState extends State<MapPage> {
       ),
     );
 
-    // places markers
+    // مارکرهای مکان‌ها
     for (final p in places) {
       markers.add(
         Marker(
@@ -137,15 +139,49 @@ class _MapPageState extends State<MapPage> {
       );
     }
 
+    // مارکر قرمز برای انتخاب مکان
+    if (_isSelectingLocation && _tempLocation != null) {
+      markers.add(
+        Marker(
+          point: _tempLocation!,
+          width: 40,
+          height: 40,
+          child: GestureDetector(
+            onPanUpdate: (details) {
+              // محاسبه مختصات جدید موقع drag با Point از dart:math
+              final renderBox = context.findRenderObject() as RenderBox?;
+              if (renderBox == null) return;
+              final offset = renderBox.globalToLocal(details.globalPosition);
+              final latLng = _mapController.camera.pointToLatLng(
+                math.Point<double>(offset.dx, offset.dy),
+              );
+              if (latLng != null) {
+                setState(() {
+                  _tempLocation = latLng;
+                });
+              }
+            },
+            child: const Icon(Icons.location_on, color: Colors.red, size: 40),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       body: Stack(
         children: [
-          // map
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
               initialCenter: _currentLocation,
               initialZoom: _zoom,
+              onTap: _isSelectingLocation
+                  ? (tapPosition, point) {
+                      setState(() {
+                        _tempLocation = point;
+                      });
+                    }
+                  : null,
             ),
             children: [
               TileLayer(
@@ -157,14 +193,33 @@ class _MapPageState extends State<MapPage> {
             ],
           ),
 
-          // top search + category chips + user avatar
+          // دکمه تأیید انتخاب مکان
+          if (_isSelectingLocation)
+            Positioned(
+              bottom: 24,
+              left: 12,
+              child: FloatingActionButton(
+                heroTag: 'confirm_location',
+                onPressed: () {
+                  if (_tempLocation != null) {
+                    // بازگشت به فرم با مختصات انتخاب‌شده
+                    _openAddPlaceDialog(_tempLocation!);
+                  }
+                  setState(() {
+                    _isSelectingLocation = false;
+                    _tempLocation = null;
+                  });
+                },
+                child: const Icon(Icons.check),
+              ),
+            ),
+
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // search bar with constrained width
                   Container(
                     width: MediaQuery.of(context).size.width * 0.5,
                     height: 52,
@@ -237,7 +292,6 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
 
-                  // category chips
                   Expanded(
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
@@ -275,7 +329,6 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
 
-                  // user avatar
                   GestureDetector(
                     onTap: () {
                       if (user == null) {
@@ -285,7 +338,6 @@ class _MapPageState extends State<MapPage> {
                         );
                         return;
                       }
-                      // if logged in, maybe open profile or settings
                     },
                     child: user == null
                         ? Container(
@@ -334,7 +386,6 @@ class _MapPageState extends State<MapPage> {
             ),
           ),
 
-          // left vertical full-height bar for logged-in users
           if (user != null)
             Positioned(
               left: 0,
@@ -389,10 +440,20 @@ class _MapPageState extends State<MapPage> {
                     IconButton(
                       tooltip: 'Recent',
                       icon: const Icon(Icons.history),
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Recent not implemented'),
+                      onPressed: () async {
+                        await Provider.of<PlacesProvider>(
+                          context,
+                          listen: false,
+                        ).fetchRecentPlaces();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => RecentPlacesPage(
+                              onSelect: (p) {
+                                Navigator.pop(context);
+                                _mapController.move(LatLng(p.lat, p.lng), 15);
+                              },
+                            ),
                           ),
                         );
                       },
@@ -402,7 +463,6 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
 
-          // bottom-right control buttons (location, zoom in, zoom out)
           Positioned(
             right: 12,
             bottom: 24,
@@ -445,23 +505,152 @@ class _MapPageState extends State<MapPage> {
       );
       return;
     }
-    // TODO: implement add place flow (dialog)
+
+    final titleController = TextEditingController();
+    final latController = TextEditingController(
+      text: center.latitude.toString(),
+    );
+    final lngController = TextEditingController(
+      text: center.longitude.toString(),
+    );
+    String? selectedCategory;
+
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Add Place'),
-        content: const Text('Add Place dialog not yet implemented here.'),
+        title: const Text('اضافه کردن مکان جدید'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                decoration: InputDecoration(
+                  labelText: 'نام مکان',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                decoration: InputDecoration(
+                  labelText: 'دسته‌بندی',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                items: categories.map((c) {
+                  return DropdownMenuItem(
+                    value: c['key'] as String,
+                    child: Text(c['label'] as String),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  selectedCategory = value;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: latController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'عرض جغرافیایی (Latitude)',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: lngController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'طول جغرافیایی (Longitude)',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context); // بستن دیالوگ
+                  setState(() {
+                    _isSelectingLocation = true;
+                    _tempLocation = center; // شروع با مرکز نقشه
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('مکان را با drag یا tap انتخاب کنید'),
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F7CFF),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Visualize Location'),
+              ),
+            ],
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: const Text('لغو'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (titleController.text.trim().isEmpty ||
+                  selectedCategory == null ||
+                  latController.text.trim().isEmpty ||
+                  lngController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('لطفاً تمام فیلدها را پر کنید')),
+                );
+                return;
+              }
+              try {
+                final newPlace = Place(
+                  id: '',
+                  userId: FirebaseAuth.instance.currentUser!.uid,
+                  title: titleController.text.trim(),
+                  category: selectedCategory!,
+                  lat: double.parse(latController.text.trim()),
+                  lng: double.parse(lngController.text.trim()),
+                );
+                await Provider.of<PlacesProvider>(
+                  context,
+                  listen: false,
+                ).addPlace(newPlace);
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('مکان با موفقیت اضافه شد')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('خطا در اضافه کردن مکان: $e')),
+                );
+              }
+            },
+            child: const Text('اضافه کردن'),
           ),
         ],
       ),
     );
   }
 
-  void _showPlaceDialog(Place p) {
+  void _showPlaceDialog(Place p) async {
+    if (FirebaseAuth.instance.currentUser != null) {
+      await Provider.of<PlacesProvider>(
+        context,
+        listen: false,
+      ).addRecentPlace(p);
+    }
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
