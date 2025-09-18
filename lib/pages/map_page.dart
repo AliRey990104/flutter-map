@@ -10,13 +10,17 @@ import 'dart:math' as math;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-import 'package:url_launcher/url_launcher.dart'; // اضافه کردن import
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 import '../providers/places_provider.dart';
 import '../models/place.dart';
+import '../widgets/top_banner.dart';
 import 'login_page.dart';
 import 'saved_places_page.dart';
 import 'recent_places_page.dart';
+import 'my_places_page.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -30,8 +34,11 @@ class _MapPageState extends State<MapPage> {
   LatLng _currentLocation = const LatLng(29.6347, 52.5225); // شیراز پیش‌فرض
   double _zoom = 13.0;
   bool _locationLoaded = false;
-  bool _isSelectingLocation = false; // حالت انتخاب مکان
-  LatLng? _tempLocation; // مختصات موقت برای مارکر قرمز
+  bool _isSelectingLocation = false;
+  LatLng? _tempLocation;
+  bool _showDirections = false;
+  List<LatLng> _routePoints = [];
+  String _imagePath = '';
 
   final List<Map<String, dynamic>> categories = [
     {'key': 'pharmacy', 'label': 'Pharmacy', 'icon': Icons.local_pharmacy},
@@ -40,16 +47,15 @@ class _MapPageState extends State<MapPage> {
     {'key': 'gas', 'label': 'Gas', 'icon': Icons.local_gas_station},
   ];
   String? _selectedCategory;
-  final double _radiusMeters = 5000000000;
+  final double _radiusMeters = 5000;
 
   @override
   void initState() {
     super.initState();
     _initFlow();
-    // Listener برای رفرش بعد از لاگین
     FirebaseAuth.instance.authStateChanges().listen((User? user) {
       if (user != null) {
-        setState(() {}); // رفرش UI بعد از لاگین
+        setState(() {});
         _refreshAfterLogin();
       }
     });
@@ -62,7 +68,6 @@ class _MapPageState extends State<MapPage> {
         radiusMeters: _radiusMeters,
         categoryFilter: _selectedCategory,
       );
-      // زوم کوچک برای رفرش
       _mapController.move(_mapController.camera.center, _zoom);
     }
   }
@@ -120,23 +125,103 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<String?> _pickAndSaveImage() async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile == null) return null;
-
     try {
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+      if (pickedFile == null) return null;
+
       final directory = await getApplicationDocumentsDirectory();
       final imagesDir = Directory(path.join(directory.path, 'places_images'));
-      await imagesDir.create(recursive: true); // ایجاد پوشه اگر وجود نداره
-      final fileName = path.basename(pickedFile.path);
+      await imagesDir.create(recursive: true);
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'place_$timestamp.${path.extension(pickedFile.path)}';
       final savedImage = await File(
         pickedFile.path,
       ).copy(path.join(imagesDir.path, fileName));
+
+      showTopBanner(
+        context,
+        'عکس با موفقیت ذخیره شد',
+        isError: false,
+        duration: const Duration(seconds: 3),
+      );
+
       return savedImage.path;
     } catch (e) {
-      print('Error saving image: $e');
+      showTopBanner(
+        context,
+        'خطا در ذخیره عکس: ${e.toString()}',
+        isError: true,
+        duration: const Duration(seconds: 4),
+      );
       return null;
     }
+  }
+
+  Future<void> _getRoute(LatLng start, LatLng end) async {
+    try {
+      // استفاده از OpenStreetMap Nominatim برای geocoding (رایگان)
+      final startUrl = Uri.parse(
+        'https://nominatim.openstreetmap.org/reverse?format=json&lat=${start.latitude}&lon=${start.longitude}&zoom=18&addressdetails=1',
+      );
+      final endUrl = Uri.parse(
+        'https://nominatim.openstreetmap.org/reverse?format=json&lat=${end.latitude}&lon=${end.longitude}&zoom=18&addressdetails=1',
+      );
+
+      final startResponse = await http.get(
+        startUrl,
+        headers: {'User-Agent': 'FlutterMapApp/1.0'},
+      );
+      final endResponse = await http.get(
+        endUrl,
+        headers: {'User-Agent': 'FlutterMapApp/1.0'},
+      );
+
+      if (startResponse.statusCode == 200 && endResponse.statusCode == 200) {
+        // مسیر ساده - خط مستقیم (برای سادگی)
+        // در حالت واقعی، از ORS API استفاده کن
+        setState(() {
+          _routePoints = [
+            start,
+            LatLng(
+              (start.latitude + end.latitude) / 2,
+              (start.longitude + end.longitude) / 2,
+            ),
+            end,
+          ];
+          _showDirections = true;
+        });
+
+        showTopBanner(
+          context,
+          'مسیر نمایش داده شد',
+          isError: false,
+          duration: const Duration(seconds: 3),
+        );
+      } else {
+        showTopBanner(
+          context,
+          'خطا در محاسبه مسیر',
+          isError: true,
+          duration: const Duration(seconds: 4),
+        );
+      }
+    } catch (e) {
+      showTopBanner(
+        context,
+        'خطا در دریافت مسیر: ${e.toString()}',
+        isError: true,
+        duration: const Duration(seconds: 4),
+      );
+    }
+  }
+
+  void _clearRoute() {
+    setState(() {
+      _showDirections = false;
+      _routePoints = [];
+    });
   }
 
   @override
@@ -233,8 +318,35 @@ class _MapPageState extends State<MapPage> {
                 subdomains: const ['a', 'b', 'c'],
               ),
               MarkerLayer(markers: markers),
+              // مسیر دایرکشن
+              if (_showDirections)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.blue,
+                      strokeWidth: 4.0,
+                      borderColor: Colors.blue[200]!,
+                      borderStrokeWidth: 2.0,
+                    ),
+                  ],
+                ),
             ],
           ),
+
+          // دکمه پاک کردن مسیر
+          if (_showDirections)
+            Positioned(
+              top: 100,
+              right: 12,
+              child: FloatingActionButton(
+                heroTag: 'clear_route',
+                mini: true,
+                backgroundColor: Colors.red,
+                onPressed: _clearRoute,
+                child: const Icon(Icons.close, color: Colors.white),
+              ),
+            ),
 
           // دکمه تأیید انتخاب مکان
           if (_isSelectingLocation)
@@ -256,6 +368,7 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
 
+          // Top search bar
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(18),
@@ -280,7 +393,7 @@ class _MapPageState extends State<MapPage> {
                         Expanded(
                           child: TextField(
                             decoration: const InputDecoration.collapsed(
-                              hintText: 'Search places by title...',
+                              hintText: 'جستجوی مکان‌ها بر اساس نام...',
                             ),
                             onSubmitted: (q) async {
                               await provider.fetchPlaces(
@@ -297,9 +410,10 @@ class _MapPageState extends State<MapPage> {
                               showDialog(
                                 context: context,
                                 builder: (_) => AlertDialog(
-                                  title: Text('Search results for "$q"'),
+                                  title: Text('نتایج جستجو برای "$q"'),
                                   content: SizedBox(
                                     width: double.maxFinite,
+                                    height: 300,
                                     child: ListView(
                                       shrinkWrap: true,
                                       children: filtered
@@ -322,7 +436,7 @@ class _MapPageState extends State<MapPage> {
                                   actions: [
                                     TextButton(
                                       onPressed: () => Navigator.pop(context),
-                                      child: const Text('Close'),
+                                      child: const Text('بستن'),
                                     ),
                                   ],
                                 ),
@@ -371,6 +485,7 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
 
+                  // آواتار - اصلاح‌شده
                   GestureDetector(
                     onTap: () {
                       if (user == null) {
@@ -388,14 +503,14 @@ class _MapPageState extends State<MapPage> {
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               gradient: const LinearGradient(
-                                colors: [Colors.blue, Colors.red],
+                                colors: [Colors.black, Colors.grey],
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                               ),
                             ),
                             child: const Center(
                               child: Text(
-                                "Sign\nIn/Up",
+                                "ورود / \nثبت نام",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   color: Colors.white,
@@ -428,6 +543,7 @@ class _MapPageState extends State<MapPage> {
             ),
           ),
 
+          // نوار سمت چپ
           if (user != null)
             Positioned(
               left: 0,
@@ -454,6 +570,28 @@ class _MapPageState extends State<MapPage> {
                       icon: const Icon(Icons.add_location_alt),
                       onPressed: () {
                         _openAddPlaceDialog(_mapController.camera.center);
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    IconButton(
+                      tooltip: 'My Places',
+                      icon: const Icon(Icons.my_location),
+                      onPressed: () async {
+                        await Provider.of<PlacesProvider>(
+                          context,
+                          listen: false,
+                        ).fetchPlaces();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => MyPlacesPage(
+                              onSelect: (p) {
+                                Navigator.pop(context);
+                                _mapController.move(LatLng(p.lat, p.lng), 15);
+                              },
+                            ),
+                          ),
+                        );
                       },
                     ),
                     const SizedBox(height: 8),
@@ -505,6 +643,7 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
 
+          // دکمه‌های کنترل
           Positioned(
             right: 12,
             bottom: 24,
@@ -562,7 +701,6 @@ class _MapPageState extends State<MapPage> {
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
-        // StatefulBuilder برای به‌روزرسانی state
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('اضافه کردن مکان جدید'),
           content: SingleChildScrollView(
@@ -611,7 +749,7 @@ class _MapPageState extends State<MapPage> {
                         });
                       },
                     ),
-                    const Text('Public'),
+                    const Text('عمومی'),
                     Radio<bool>(
                       value: false,
                       groupValue: isPublic,
@@ -621,7 +759,7 @@ class _MapPageState extends State<MapPage> {
                         });
                       },
                     ),
-                    const Text('Private'),
+                    const Text('خصوصی'),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -648,44 +786,50 @@ class _MapPageState extends State<MapPage> {
                 ),
                 const SizedBox(height: 12),
                 // آپلود عکس
-                ElevatedButton(
+                ElevatedButton.icon(
                   onPressed: () async {
                     final imagePathSelected = await _pickAndSaveImage();
                     if (imagePathSelected != null) {
                       setDialogState(() {
                         imagePath = imagePathSelected;
                       });
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('عکس ذخیره شد')),
-                      );
                     }
                   },
-                  child: Text(
-                    'آپلود عکس (${imagePath.isNotEmpty ? 'OK' : 'انتخاب'})',
+                  icon: const Icon(Icons.photo_camera),
+                  label: Text(
+                    'آپلود عکس ${imagePath.isNotEmpty ? '(✓)' : '(انتخاب)'}',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
-                ElevatedButton(
+                ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.pop(context); // بستن دیالوگ
+                    Navigator.pop(context);
                     setState(() {
                       _isSelectingLocation = true;
-                      _tempLocation = center; // شروع با مرکز نقشه
+                      _tempLocation = center;
                     });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('مکان را با drag یا tap انتخاب کنید'),
-                        duration: Duration(seconds: 3),
-                      ),
+                    showTopBanner(
+                      context,
+                      'مکان را با drag یا tap انتخاب کنید',
+                      isError: false,
+                      duration: const Duration(seconds: 3),
                     );
                   },
+                  icon: const Icon(Icons.location_on),
+                  label: const Text('انتخاب مکان روی نقشه'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF0F7CFF),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: const Text('Visualize Location'),
                 ),
               ],
             ),
@@ -701,10 +845,11 @@ class _MapPageState extends State<MapPage> {
                     selectedCategory == null ||
                     latController.text.trim().isEmpty ||
                     lngController.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('لطفاً تمام فیلدها را پر کنید'),
-                    ),
+                  showTopBanner(
+                    context,
+                    'لطفاً تمام فیلدها را پر کنید',
+                    isError: true,
+                    duration: const Duration(seconds: 4),
                   );
                   return;
                 }
@@ -724,12 +869,18 @@ class _MapPageState extends State<MapPage> {
                     listen: false,
                   ).addPlace(newPlace);
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('مکان با موفقیت اضافه شد')),
+                  showTopBanner(
+                    context,
+                    'مکان با موفقیت اضافه شد',
+                    isError: false,
+                    duration: const Duration(seconds: 3),
                   );
                 } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('خطا در اضافه کردن مکان: $e')),
+                  showTopBanner(
+                    context,
+                    'خطا در اضافه کردن مکان: ${e.toString()}',
+                    isError: true,
+                    duration: const Duration(seconds: 5),
                   );
                 }
               },
@@ -753,120 +904,176 @@ class _MapPageState extends State<MapPage> {
     final distance = provider.calculateDistance(
       _currentLocation,
       LatLng(p.lat, p.lng),
-    ); // استفاده از متد public
+    );
 
     showDialog(
       context: context,
       builder: (_) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
-          padding: const EdgeInsets.all(16),
+          width: MediaQuery.of(context).size.width * 0.85,
+          constraints: const BoxConstraints(maxHeight: 450), // کوتاه‌تر
+          padding: const EdgeInsets.all(12),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Header: Title left, Creator right
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Flexible(
+                  Expanded(
                     child: Text(
                       p.title,
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ),
-                  Text(
-                    p.creatorEmail.isNotEmpty
-                        ? p.creatorEmail.split('@')[0]
-                        : 'Unknown',
-                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[100],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      p.creatorEmail.isNotEmpty
+                          ? p.creatorEmail.split('@')[0]
+                          : 'ناشناس',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue[800],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const Divider(height: 20, thickness: 1, color: Colors.grey),
+
               // Image
-              if (p.imagePath.isNotEmpty)
+              if (p.imagePath.isNotEmpty) ...[
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: Image.file(
                     File(p.imagePath),
-                    height: 200,
+                    height: 140, // کوتاه‌تر
                     width: double.infinity,
                     fit: BoxFit.cover,
                     errorBuilder: (context, error, stackTrace) {
                       return Container(
-                        height: 200,
-                        width: double.infinity,
-                        color: Colors.grey[300],
-                        child: const Icon(Icons.image_not_supported, size: 50),
+                        height: 140,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.image_not_supported,
+                          size: 40,
+                          color: Colors.grey,
+                        ),
                       );
                     },
                   ),
                 ),
-              const SizedBox(height: 12),
+                const SizedBox(height: 12),
+              ],
+              const Divider(height: 20, thickness: 1, color: Colors.grey),
+
               // Icons row
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.favorite_border),
-                    onPressed: () {}, // Placeholder for like
+                    icon: const Icon(Icons.favorite_border, color: Colors.red),
+                    tooltip: 'لایک',
+                    onPressed: () {
+                      // Placeholder for like
+                      showTopBanner(
+                        context,
+                        'قابلیت لایک به زودی',
+                        isError: false,
+                        duration: const Duration(seconds: 2),
+                      );
+                    },
                   ),
                   IconButton(
-                    icon: const Icon(Icons.comment),
-                    onPressed: () {}, // Placeholder for comment
+                    icon: const Icon(Icons.comment, color: Colors.blue),
+                    tooltip: 'نظرات',
+                    onPressed: () {
+                      // Placeholder for comment
+                      showTopBanner(
+                        context,
+                        'قابلیت نظرات به زودی',
+                        isError: false,
+                        duration: const Duration(seconds: 2),
+                      );
+                    },
                   ),
                   IconButton(
-                    icon: const Icon(Icons.bookmark_border),
+                    icon: const Icon(
+                      Icons.bookmark_border,
+                      color: Colors.orange,
+                    ),
+                    tooltip: 'ذخیره',
                     onPressed: () {
                       Provider.of<PlacesProvider>(
                         context,
                         listen: false,
                       ).savePlace(p);
                       Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('مکان ذخیره شد')),
+                      showTopBanner(
+                        context,
+                        'مکان ذخیره شد',
+                        isError: false,
+                        duration: const Duration(seconds: 3),
                       );
                     },
                   ),
                   IconButton(
-                    icon: const Icon(Icons.directions),
+                    icon: const Icon(Icons.directions, color: Colors.green),
+                    tooltip: 'مسیر',
                     onPressed: () async {
-                      final url =
-                          'https://maps.google.com/dir/?api=1&destination=${p.lat},${p.lng}';
-                      final uri = Uri.parse(url);
-                      if (await canLaunchUrl(uri)) {
-                        await launchUrl(
-                          uri,
-                          mode: LaunchMode.externalApplication,
-                        );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('نمی‌توان نقشه را باز کرد'),
-                          ),
-                        );
-                      }
+                      Navigator.pop(context);
+                      await _getRoute(_currentLocation, LatLng(p.lat, p.lng));
                     },
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const Divider(height: 20, thickness: 1, color: Colors.grey),
+
               // Bottom: Created time left, Distance right
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     p.createdAt != null
-                        ? 'ایجاد: ${p.createdAt!.toLocal().toString().split(' ')[0]}'
+                        ? 'ایجاد: ${p.createdAt!.day}/${p.createdAt!.month}/${p.createdAt!.year}'
                         : 'نامشخص',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
-                  Text(
-                    '${distance.toStringAsFixed(1)} km',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.green[100],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${distance.toStringAsFixed(1)} km',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.green[800],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
                 ],
               ),

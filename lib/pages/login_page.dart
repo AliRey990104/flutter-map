@@ -14,11 +14,36 @@ class _LoginPageState extends State<LoginPage> {
   final _auth = FirebaseAuth.instance;
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController(); // فیلد جدید
   final _resetEmailController = TextEditingController();
   bool _isLogin = true;
   bool _loading = false;
 
+  String? _passwordError; // خطای رمز فارسی
+
   Future<void> _submit() async {
+    // validation رمز عبور
+    if (!_isLogin) {
+      if (_passwordController.text.length < 6) {
+        showTopBanner(
+          context,
+          "رمز عبور باید حداقل 6 کاراکتر باشد",
+          isError: true,
+          duration: const Duration(seconds: 6),
+        );
+        return;
+      }
+      if (_passwordController.text != _confirmPasswordController.text) {
+        showTopBanner(
+          context,
+          "رمزهای عبور مطابقت ندارند",
+          isError: true,
+          duration: const Duration(seconds: 6),
+        );
+        return;
+      }
+    }
+
     setState(() => _loading = true);
     try {
       if (_isLogin) {
@@ -26,7 +51,6 @@ class _LoginPageState extends State<LoginPage> {
           email: _emailController.text.trim(),
           password: _passwordController.text.trim(),
         );
-        // success
         showTopBanner(
           context,
           "ورود موفق",
@@ -35,7 +59,7 @@ class _LoginPageState extends State<LoginPage> {
         );
         Navigator.pop(context);
       } else {
-        // چک برای ثبت‌نام تکراری
+        // چک تکراری
         try {
           await _auth.signInWithEmailAndPassword(
             email: _emailController.text.trim(),
@@ -47,10 +71,9 @@ class _LoginPageState extends State<LoginPage> {
             isError: true,
             duration: const Duration(seconds: 6),
           );
-          setState(() => _isLogin = true); // سوئیچ به حالت ورود
+          setState(() => _isLogin = true);
           return;
         } catch (e) {
-          // اگر خطا داد، یعنی کاربر وجود نداره، پس ثبت‌نام کن
           await _auth.createUserWithEmailAndPassword(
             email: _emailController.text.trim(),
             password: _passwordController.text.trim(),
@@ -65,17 +88,36 @@ class _LoginPageState extends State<LoginPage> {
         }
       }
     } on FirebaseAuthException catch (e) {
-      final msg = e.message ?? e.code;
+      String msg;
+      switch (e.code) {
+        case 'user-not-found':
+          msg = 'کاربر یافت نشد';
+          break;
+        case 'wrong-password':
+          msg = 'رمز عبور اشتباه است';
+          break;
+        case 'invalid-email':
+          msg = 'ایمیل نامعتبر است';
+          break;
+        case 'email-already-in-use':
+          msg = 'این ایمیل قبلاً استفاده شده';
+          break;
+        case 'weak-password':
+          msg = 'رمز عبور ضعیف است';
+          break;
+        default:
+          msg = e.message ?? 'خطای ناشناخته';
+      }
       showTopBanner(
         context,
-        "خطا: $msg",
+        msg,
         isError: true,
         duration: const Duration(seconds: 15),
       );
     } catch (e) {
       showTopBanner(
         context,
-        "خطای غیر منتظره: $e",
+        "خطای غیرمنتظره: $e",
         isError: true,
         duration: const Duration(seconds: 15),
       );
@@ -105,19 +147,26 @@ class _LoginPageState extends State<LoginPage> {
         isError: false,
         duration: const Duration(seconds: 6),
       );
-      Navigator.pop(context); // Close the reset password dialog
+      Navigator.pop(context);
     } on FirebaseAuthException catch (e) {
-      final msg = e.message ?? e.code;
+      String msg;
+      switch (e.code) {
+        case 'invalid-email':
+          msg = 'ایمیل نامعتبر است';
+          break;
+        default:
+          msg = e.message ?? 'خطا در ارسال ایمیل';
+      }
       showTopBanner(
         context,
-        "خطا: $msg",
+        msg,
         isError: true,
         duration: const Duration(seconds: 15),
       );
     } catch (e) {
       showTopBanner(
         context,
-        "خطای غیر منتظره: $e",
+        "خطای غیرمنتظره: $e",
         isError: true,
         duration: const Duration(seconds: 15),
       );
@@ -171,6 +220,7 @@ class _LoginPageState extends State<LoginPage> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose();
     _resetEmailController.dispose();
     super.dispose();
   }
@@ -250,6 +300,21 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                       ),
+                      // confirm password (فقط در حالت ثبت‌نام)
+                      if (!_isLogin) ...[
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _confirmPasswordController,
+                          obscureText: true,
+                          decoration: InputDecoration(
+                            prefixIcon: const Icon(Icons.lock_outline),
+                            labelText: "تکرار رمز عبور",
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 18),
 
                       // submit
