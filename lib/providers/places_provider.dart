@@ -1,10 +1,12 @@
 // lib/providers/places_provider.dart
-import 'dart:math' as math; // اضافه کردن import math
+import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/place.dart';
+
+const double minRadi = 500000000;
 
 class PlacesProvider with ChangeNotifier {
   List<Place> _places = [];
@@ -17,7 +19,7 @@ class PlacesProvider with ChangeNotifier {
 
   Future<void> fetchPlaces({
     LatLng? userLocation,
-    double radiusMeters = 5000,
+    double radiusMeters = minRadi,
     String? categoryFilter,
   }) async {
     try {
@@ -37,7 +39,6 @@ class PlacesProvider with ChangeNotifier {
             final isPublic = data['isPublic'] ?? true;
             final placeUserId = data['userId'] ?? '';
 
-            // فیلتر private places - فقط اگر public باشه یا مال خود کاربر باشه نشون بده
             if (!isPublic &&
                 currentUserId != null &&
                 currentUserId != placeUserId) {
@@ -254,7 +255,6 @@ class PlacesProvider with ChangeNotifier {
     }
   }
 
-  // متد public برای محاسبه فاصله
   double calculateDistance(LatLng from, LatLng to) {
     return _calculateDistance(
       from.latitude,

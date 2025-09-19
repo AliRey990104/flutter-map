@@ -1,5 +1,7 @@
 // lib/pages/map_page.dart
 import 'dart:io';
+//import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -10,8 +12,7 @@ import 'dart:math' as math;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-import 'package:url_launcher/url_launcher.dart';
-import 'dart:convert';
+//import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 
 import '../providers/places_provider.dart';
@@ -31,14 +32,15 @@ class MapPage extends StatefulWidget {
 
 class _MapPageState extends State<MapPage> {
   final MapController _mapController = MapController();
-  LatLng _currentLocation = const LatLng(29.6347, 52.5225); // شیراز پیش‌فرض
+  LatLng _currentLocation = const LatLng(29.6347, 52.5225);
+  LatLng? _tempLocation;
   double _zoom = 13.0;
   bool _locationLoaded = false;
   bool _isSelectingLocation = false;
-  LatLng? _tempLocation;
   bool _showDirections = false;
   List<LatLng> _routePoints = [];
-  String _imagePath = '';
+  //String _imagePath = '';
+  String? _selectedCategory;
 
   final List<Map<String, dynamic>> categories = [
     {'key': 'pharmacy', 'label': 'Pharmacy', 'icon': Icons.local_pharmacy},
@@ -46,8 +48,6 @@ class _MapPageState extends State<MapPage> {
     {'key': 'clinic', 'label': 'Clinic', 'icon': Icons.medical_services},
     {'key': 'gas', 'label': 'Gas', 'icon': Icons.local_gas_station},
   ];
-  String? _selectedCategory;
-  final double _radiusMeters = 5000;
 
   @override
   void initState() {
@@ -65,7 +65,7 @@ class _MapPageState extends State<MapPage> {
     if (_locationLoaded) {
       await Provider.of<PlacesProvider>(context, listen: false).fetchPlaces(
         userLocation: _currentLocation,
-        radiusMeters: _radiusMeters,
+
         categoryFilter: _selectedCategory,
       );
       _mapController.move(_mapController.camera.center, _zoom);
@@ -78,7 +78,7 @@ class _MapPageState extends State<MapPage> {
     if (user != null && _locationLoaded) {
       await Provider.of<PlacesProvider>(context, listen: false).fetchPlaces(
         userLocation: _currentLocation,
-        radiusMeters: _radiusMeters,
+
         categoryFilter: _selectedCategory,
       );
     } else {
@@ -161,7 +161,6 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _getRoute(LatLng start, LatLng end) async {
     try {
-      // استفاده از OpenStreetMap Nominatim برای geocoding (رایگان)
       final startUrl = Uri.parse(
         'https://nominatim.openstreetmap.org/reverse?format=json&lat=${start.latitude}&lon=${start.longitude}&zoom=18&addressdetails=1',
       );
@@ -179,8 +178,6 @@ class _MapPageState extends State<MapPage> {
       );
 
       if (startResponse.statusCode == 200 && endResponse.statusCode == 200) {
-        // مسیر ساده - خط مستقیم (برای سادگی)
-        // در حالت واقعی، از ORS API استفاده کن
         setState(() {
           _routePoints = [
             start,
@@ -231,7 +228,7 @@ class _MapPageState extends State<MapPage> {
     final user = FirebaseAuth.instance.currentUser;
     final markers = <Marker>[];
 
-    // مارکر موقعیت فعلی کاربر
+    // curret user Marker
     markers.add(
       Marker(
         point: _currentLocation,
@@ -253,7 +250,7 @@ class _MapPageState extends State<MapPage> {
       ),
     );
 
-    // مارکرهای مکان‌ها
+    // places Marker
     for (final p in places) {
       markers.add(
         Marker(
@@ -268,7 +265,7 @@ class _MapPageState extends State<MapPage> {
       );
     }
 
-    // مارکر قرمز برای انتخاب مکان
+    // red Marker for add place
     if (_isSelectingLocation && _tempLocation != null) {
       markers.add(
         Marker(
@@ -283,11 +280,9 @@ class _MapPageState extends State<MapPage> {
               final latLng = _mapController.camera.pointToLatLng(
                 math.Point<double>(offset.dx, offset.dy),
               );
-              if (latLng != null) {
-                setState(() {
-                  _tempLocation = latLng;
-                });
-              }
+              setState(() {
+                _tempLocation = latLng;
+              });
             },
             child: const Icon(Icons.location_on, color: Colors.red, size: 40),
           ),
@@ -318,7 +313,7 @@ class _MapPageState extends State<MapPage> {
                 subdomains: const ['a', 'b', 'c'],
               ),
               MarkerLayer(markers: markers),
-              // مسیر دایرکشن
+              // direction route
               if (_showDirections)
                 PolylineLayer(
                   polylines: [
@@ -334,7 +329,7 @@ class _MapPageState extends State<MapPage> {
             ],
           ),
 
-          // دکمه پاک کردن مسیر
+          // delete route btn
           if (_showDirections)
             Positioned(
               top: 100,
@@ -348,7 +343,7 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
 
-          // دکمه تأیید انتخاب مکان
+          // choose place btn
           if (_isSelectingLocation)
             Positioned(
               bottom: 24,
@@ -398,7 +393,6 @@ class _MapPageState extends State<MapPage> {
                             onSubmitted: (q) async {
                               await provider.fetchPlaces(
                                 userLocation: _currentLocation,
-                                radiusMeters: _radiusMeters,
                               );
                               final filtered = provider.places
                                   .where(
@@ -474,7 +468,7 @@ class _MapPageState extends State<MapPage> {
                                   userLocation: user != null
                                       ? _currentLocation
                                       : null,
-                                  radiusMeters: _radiusMeters,
+
                                   categoryFilter: _selectedCategory,
                                 );
                               },
@@ -485,7 +479,7 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
 
-                  // آواتار - اصلاح‌شده
+                  // Avatar
                   GestureDetector(
                     onTap: () {
                       if (user == null) {
@@ -543,7 +537,7 @@ class _MapPageState extends State<MapPage> {
             ),
           ),
 
-          // نوار سمت چپ
+          // left panel
           if (user != null)
             Positioned(
               left: 0,
@@ -643,7 +637,7 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
 
-          // دکمه‌های کنترل
+          // Control btn
           Positioned(
             right: 12,
             bottom: 24,
@@ -912,7 +906,7 @@ class _MapPageState extends State<MapPage> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.85,
-          constraints: const BoxConstraints(maxHeight: 450), // کوتاه‌تر
+          constraints: const BoxConstraints(maxHeight: 450),
           padding: const EdgeInsets.all(12),
           child: Column(
             mainAxisSize: MainAxisSize.min,

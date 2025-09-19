@@ -1,9 +1,6 @@
 // lib/widgets/top_banner.dart
 import 'package:flutter/material.dart';
 
-/// showTopBanner(context, message, isError: true/false, duration: Duration)
-/// نمایش یک banner در بالای صفحه (راست-بالا) با متن، رنگ مناسب (قرمز/سبز)
-/// و یک نوار پیشرفت خطی که در پایان duration به‌صورت خودکار ناپدید می‌شود.
 void showTopBanner(
   BuildContext context,
   String message, {

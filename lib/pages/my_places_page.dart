@@ -1,7 +1,7 @@
 // lib/pages/my_places_page.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:latlong2/latlong.dart';
+//import 'package:latlong2/latlong.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../providers/places_provider.dart';
 import '../models/place.dart';

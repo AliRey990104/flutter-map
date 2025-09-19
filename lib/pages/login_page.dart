@@ -14,15 +14,14 @@ class _LoginPageState extends State<LoginPage> {
   final _auth = FirebaseAuth.instance;
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController(); // فیلد جدید
+  final _confirmPasswordController = TextEditingController();
   final _resetEmailController = TextEditingController();
   bool _isLogin = true;
   bool _loading = false;
 
-  String? _passwordError; // خطای رمز فارسی
+  //String? _passwordError;
 
   Future<void> _submit() async {
-    // validation رمز عبور
     if (!_isLogin) {
       if (_passwordController.text.length < 6) {
         showTopBanner(
@@ -59,7 +58,6 @@ class _LoginPageState extends State<LoginPage> {
         );
         Navigator.pop(context);
       } else {
-        // چک تکراری
         try {
           await _auth.signInWithEmailAndPassword(
             email: _emailController.text.trim(),
@@ -260,6 +258,7 @@ class _LoginPageState extends State<LoginPage> {
                           tooltip: 'بازگشت',
                         ),
                       ),
+
                       // logo area
                       Image.asset('assets/uni.png', height: 76, width: 76),
                       const SizedBox(height: 8),
@@ -300,7 +299,7 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                       ),
-                      // confirm password (فقط در حالت ثبت‌نام)
+
                       if (!_isLogin) ...[
                         const SizedBox(height: 12),
                         TextField(
